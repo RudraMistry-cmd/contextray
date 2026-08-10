@@ -1,4 +1,4 @@
-"""Basic API tests for the tokenlens package (runnable without pytest)."""
+﻿"""Basic API tests for the contextray package (runnable without pytest)."""
 
 import os
 import sys
@@ -6,7 +6,7 @@ import sys
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(_THIS_DIR), "src"))
 
-from tokenlens import optimize_context  # noqa: E402
+from contextray import optimize_context  # noqa: E402
 
 MESSAGE_KEYS = {"role", "content"}
 

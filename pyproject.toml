@@ -3,14 +3,14 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tokenlens"
+name = "contextray"
 version = "0.1.0"
 description = "Character-level context optimizer: chunks chat histories with code-block protection, deduplicates exactly, and reports per-role token savings."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
 authors = [
-    { name = "TokenLens contributors" },
+    { name = "ContextRay contributors" },
 ]
 keywords = ["llm", "context", "chunking", "deduplication", "tokens"]
 classifiers = [
@@ -20,7 +20,7 @@ classifiers = [
 ]
 
 [project.scripts]
-tokenlens = "tokenlens.cli:main"
+contextray = "contextray.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

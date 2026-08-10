@@ -1,4 +1,4 @@
-"""CLI: ``tokenlens optimize input.json [--output out.json] [--stdout]``."""
+"""CLI: ``contextray optimize input.json [--output out.json] [--stdout]``."""
 
 import argparse
 import json
@@ -10,7 +10,7 @@ from .core import optimize_context
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="tokenlens",
+        prog="contextray",
         description="Optimize chat message context: chunking, deduplication, reporting.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -22,6 +22,15 @@ def build_parser() -> argparse.ArgumentParser:
     opt.add_argument("--stdout", action="store_true",
                      help="Print the optimized JSON to stdout instead of a file.")
     return parser
+
+
+def _success_header(stream) -> str:
+    header = "✔ ContextRay Optimization Complete"
+    try:
+        header.encode(stream.encoding or "utf-8")
+        return header
+    except (UnicodeEncodeError, LookupError):
+        return "[OK] ContextRay Optimization Complete"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -49,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.stdout:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
+        print(_success_header(sys.stderr), file=sys.stderr)
         print(result["report"], file=sys.stderr)
     else:
         output_path = args.output
@@ -57,8 +67,9 @@ def main(argv: list[str] | None = None) -> int:
             output_path = f"{base}_optimized{ext}"
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
+        print(_success_header(sys.stdout))
         print(result["report"])
-        print(f"TokenLens optimization complete: saved {result['metrics']['chars_saved']:,} chars "
+        print(f"Saved: {result['metrics']['chars_saved']:,} chars "
               f"({result['metrics']['reduction_percentage']}% reduction)")
         print(f"Output: {output_path}")
     return 0

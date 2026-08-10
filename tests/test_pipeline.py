@@ -1,4 +1,4 @@
-"""End-to-end stress test of the context optimizer pipeline
+﻿"""End-to-end stress test of the context optimizer pipeline
    (chunk_and_hash -> detect_duplicates -> optimize_chunks -> generate_metrics_and_report).
 
 Covers:
@@ -33,14 +33,14 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(_THIS_DIR)
 sys.path.insert(0, os.path.join(_REPO_ROOT, "src"))
 
-from tokenlens.chunking import (  # noqa: E402
+from contextray.chunking import (  # noqa: E402
     chunk_and_hash,
     MAX_CHUNK_SIZE,
     MIN_CHUNK_SIZE,
 )
-from tokenlens.detection import detect_duplicates  # noqa: E402
-from tokenlens.optimization import optimize_chunks  # noqa: E402
-from tokenlens.reporting import generate_metrics_and_report  # noqa: E402
+from contextray.detection import detect_duplicates  # noqa: E402
+from contextray.optimization import optimize_chunks  # noqa: E402
+from contextray.reporting import generate_metrics_and_report  # noqa: E402
 
 HERE = _THIS_DIR
 CONTEXT_FILE = os.path.join(_REPO_ROOT, "test_contexts.txt")
@@ -275,7 +275,7 @@ messy = ("!!!RUSHED-NOTES!!!\n\n\n"
          "todo: call vendor re specs \t tomorrow\n"
          "```json\n{\"ok\": true, \"replies\": 42}\n```\n"
          "random( " * 300 + "x\n"
-         "中文内容。日本語テスト。すごい。\n"
+         "ä¸­æ–‡å†…å®¹ã€‚æ—¥æœ¬èªžãƒ†ã‚¹ãƒˆã€‚ã™ã”ã„ã€‚\n"
          "0" * 400 + "\n"
          "final line \r\n avec returns\r\n"
          "  spacing  \n\n  double break above\n"

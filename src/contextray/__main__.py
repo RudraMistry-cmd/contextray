@@ -1,4 +1,4 @@
-"""Allow ``python -m tokenlens`` to behave like the ``tokenlens`` CLI."""
+"""Allow ``python -m contextray`` to behave like the ``contextray`` CLI."""
 
 import sys
 

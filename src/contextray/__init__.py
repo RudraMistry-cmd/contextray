@@ -1,4 +1,4 @@
-"""TokenLens - character-level context optimizer for chat histories."""
+"""ContextRay - character-level context optimizer for chat histories."""
 
 from .core import optimize_context
 
