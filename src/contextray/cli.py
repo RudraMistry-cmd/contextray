@@ -39,8 +39,14 @@ def main(argv: list[str] | None = None) -> int:
         build_parser().print_usage(sys.stderr)
         return 2
 
-    with open(args.input, encoding="utf-8") as f:
-        messages = json.load(f)
+    try:
+        with open(args.input, encoding="utf-8") as f:
+            messages = json.load(f)
+    except json.JSONDecodeError as exc:
+        print(f"Error: {args.input} is not valid JSON ({exc}). "
+              f"Expected a list of message dicts: [{{\"role\": ..., \"content\": ...}}].",
+              file=sys.stderr)
+        return 1
     if not isinstance(messages, list):
         print("Error: input JSON must be a list of message dicts.", file=sys.stderr)
         return 1
