@@ -18,7 +18,7 @@ def optimize_context(messages: list[dict], *, config: dict | None = None, **kwar
     Returns
     -------
     dict with keys:
-        optimized_context : list of chunks with deduplicated text
+        optimized_context : list of {"role", "content"} messages with deduplicated text
         metrics           : character/token impact numbers
         top_waste_blocks  : worst duplicate blocks (hash, role, count, chars wasted)
         report            : human-readable summary
@@ -30,8 +30,13 @@ def optimize_context(messages: list[dict], *, config: dict | None = None, **kwar
     optimized = optimize_chunks(marked)
     report = generate_metrics_and_report(chunks, optimized)
 
+    optimized_messages = [
+        {"role": c["role"], "content": c["text"]}
+        for c in optimized
+    ]
+
     return {
-        "optimized_context": optimized,
+        "optimized_context": optimized_messages,
         "metrics": report["metrics"],
         "top_waste_blocks": report["top_waste_blocks"],
         "report": report["report"],

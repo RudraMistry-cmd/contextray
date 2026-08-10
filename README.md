@@ -39,7 +39,7 @@ from tokenlens import optimize_context
 
 result = optimize_context(messages)
 
-result["optimized_context"]  # deduplicated chunks
+result["optimized_context"]  # deduplicated messages: [{"role": ..., "content": ...}]
 result["metrics"]            # chars/tokens saved
 result["top_waste_blocks"]   # worst duplicate blocks per role
 result["report"]             # human-readable summary

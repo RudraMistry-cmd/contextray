@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(_THIS_DIR), "src"))
 
 from tokenlens import optimize_context  # noqa: E402
 
-CHUNK_KEYS = {"id", "role", "text", "length", "hash", "action", "duplicate_of"}
+MESSAGE_KEYS = {"role", "content"}
 
 
 def test_optimize_context_basic():
@@ -27,15 +27,13 @@ def test_optimize_context_basic():
 
     optimized = result["optimized_context"]
     assert isinstance(optimized, list) and optimized
-    assert all(CHUNK_KEYS <= set(c) for c in optimized)
-    assert [c["id"] for c in optimized] == list(range(len(optimized)))
+    assert all(set(m) == MESSAGE_KEYS for m in optimized), "output must be plain messages"
+    assert all(isinstance(m["role"], str) and isinstance(m["content"], str) for m in optimized)
 
-    removed_chunks = [c for c in optimized if c["action"] == "REMOVED"]
-    assert len(removed_chunks) > 0, "duplicate chunks should be removed"
-    assert all(c["text"].startswith("[duplicate of chunk #") for c in removed_chunks)
-
-    tiny_kept = [c for c in optimized if c["text"] == "unique answer"]
-    assert len(tiny_kept) == 2, "tiny duplicates are detected but not replaced"
+    markers = [m["content"] for m in optimized if m["content"].startswith("[duplicate of chunk #")]
+    assert markers, "duplicate chunks should be replaced with markers"
+    assert sum(m["content"] == "unique answer" for m in optimized) == 2, \
+        "tiny duplicates are detected but not replaced"
 
     assert result["report"] and "Impact:" in result["report"]
     assert len(result["top_waste_blocks"]) <= 5
@@ -71,14 +69,15 @@ def test_optimize_context_accepts_config():
 
 def _run():
     failures = 0
-    for name, fn in sorted((n, f) for n, f in globals().items() if n.startswith("test_")):
+    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
+    for name, fn in tests:
         try:
             fn()
             print(f"PASS  {name}")
         except AssertionError as exc:
             failures += 1
             print(f"FAIL  {name}: {exc}")
-    print(f"RESULT: {sum(1 for n in globals() if n.startswith('test_')) - failures} passed, {failures} failed")
+    print(f"RESULT: {len(tests) - failures} passed, {failures} failed")
     sys.exit(1 if failures else 0)
 
 

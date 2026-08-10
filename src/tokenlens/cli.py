@@ -2,11 +2,10 @@
 
 import argparse
 import json
+import os
 import sys
 
 from .core import optimize_context
-
-DEFAULT_OUTPUT = "output.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,8 +17,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     opt = subparsers.add_parser("optimize", help="Optimize messages from a JSON file.")
     opt.add_argument("input", help="Path to a JSON file with a list of messages.")
-    opt.add_argument("--output", "-o", default=DEFAULT_OUTPUT,
-                     help=f"Where to write the optimized JSON (default: {DEFAULT_OUTPUT}).")
+    opt.add_argument("--output", "-o",
+                     help="Where to write the optimized JSON (default: <input>_optimized<ext>).")
     opt.add_argument("--stdout", action="store_true",
                      help="Print the optimized JSON to stdout instead of a file.")
     return parser
@@ -36,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(messages, list):
         print("Error: input JSON must be a list of message dicts.", file=sys.stderr)
         return 1
+    for message in messages:
+        if not isinstance(message, dict) or "role" not in message or "content" not in message:
+            print("Error: Each message must have 'role' and 'content'.", file=sys.stderr)
+            return 1
 
     result = optimize_context(messages)
     payload = {
@@ -48,10 +51,16 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         print(result["report"], file=sys.stderr)
     else:
-        with open(args.output, "w", encoding="utf-8") as f:
+        output_path = args.output
+        if not output_path:
+            base, ext = os.path.splitext(args.input)
+            output_path = f"{base}_optimized{ext}"
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)
         print(result["report"])
-        print(f"Optimized output written to: {args.output}")
+        print(f"TokenLens optimization complete: saved {result['metrics']['chars_saved']:,} chars "
+              f"({result['metrics']['reduction_percentage']}% reduction)")
+        print(f"Output: {output_path}")
     return 0
 
 

@@ -4,6 +4,10 @@ import re
 MAX_CHUNK_SIZE = 1000
 MIN_CHUNK_SIZE = 64  # Prevents chunk explosion and negative reduction on tiny strings
 
+# Code-block protection scope (V1): only standard triple-backtick fenced blocks
+# (```...```). Inline code (``x``) and malformed/unbalanced fences are left as-is
+# and chunked like ordinary text.
+
 
 def chunk_and_hash(messages: list[dict]) -> list[dict]:
     chunks = []
@@ -17,6 +21,9 @@ def chunk_and_hash(messages: list[dict]) -> list[dict]:
             text = _restore_blocks(piece, blocks)
             length = len(text)
             # Thin chunks are noise: skip the sha256 work entirely (hash = None)
+            # Hashing decision (V1): deterministic over clever. text.strip() folds
+            # leading/trailing whitespace ("hello" == "hello\n"), but inner spacing
+            # stays significant ("hello world" != "hello  world").
             chunk_hash = None if length < MIN_CHUNK_SIZE else hashlib.sha256(text.strip().encode()).hexdigest()
             chunks.append(
                 {
