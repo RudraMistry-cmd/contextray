@@ -66,6 +66,8 @@ Given a large LLM context, ContextRay:
 ]
 ```
 
+A ready-to-run copy lives in `examples/sample_chat.json`.
+
 ### Run
 
 ```bash
@@ -77,13 +79,24 @@ contextray optimize input.json
 ```text
 ✔ ContextRay Optimization Complete
 
-Impact: 1200 chars in -> 700 chars out (500 chars saved, 41.6% reduction)
-Duplicates removed: 1
+=== CONTEXTRAY OPTIMIZATION REPORT ===
 
-Top waste blocks:
-  - assistant response repeated 2x
+📊 IMPACT
+Original: 1200 chars
+Optimized: 700 chars
+Saved: 500 chars (42%)
 
-Output: input_optimized.json
+🔥 TOP WASTE
+- Hash a1b2c3d4e5f6... repeated 2 times (450 chars wasted)
+
+🛡️ SAFETY
+✓ System messages preserved
+✓ Cross-role duplicates not removed
+✓ Code blocks protected
+✓ Small chunks skipped
+
+-------------------------------------
+Output saved to: input_optimized.json
 ```
 
 ---
