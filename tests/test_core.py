@@ -60,6 +60,24 @@ def test_optimize_context_is_deterministic():
     assert optimize_context(messages) == optimize_context(messages)
 
 
+def test_optimize_context_accepts_plain_text():
+    para = ("repeat me please " * 50).strip()  # two identical paragraphs
+    text = para + "\n\n" + para
+
+    result = optimize_context(text)
+    assert set(result) == {"optimized_context", "metrics", "top_waste_blocks", "report"}
+
+    optimized = result["optimized_context"]
+    assert isinstance(optimized, list) and len(optimized) == 2, \
+        "kept paragraph plus marker chunk"
+    assert all(set(m) == MESSAGE_KEYS for m in optimized)
+    assert optimized[0]["role"] == "text" and optimized[0]["content"] == para + "\n\n", \
+        "the kept paragraph keeps its \n\n delimiter attached"
+    assert optimized[1]["content"].startswith("[duplicate of chunk #"), \
+        "the repeated paragraph should be replaced with a marker"
+    assert result["metrics"]["chars_saved"] > 0
+
+
 def test_optimize_context_accepts_config():
     messages = [{"role": "user", "content": "x" * 2000}]
     plain = optimize_context(messages)

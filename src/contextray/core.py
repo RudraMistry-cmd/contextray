@@ -6,12 +6,14 @@ from .optimization import optimize_chunks
 from .reporting import generate_metrics_and_report
 
 
-def optimize_context(messages: list[dict], *, config: dict | None = None, **kwargs) -> dict:
+def optimize_context(messages: list[dict] | str, *, config: dict | None = None, **kwargs) -> dict:
     """Chunk, deduplicate and optimize a list of chat messages, then report savings.
 
     Parameters
     ----------
-    messages : list of {"role": str, "content": str} dicts.
+    messages : list of {"role": str, "content": str} dicts, or a plain str.
+        A str is treated as a single "text"-role message, so free text is
+        deduplicated exactly like a one-message transcript.
     config : optional dict reserved for future tuning knobs (chunk sizes, thresholds).
     **kwargs : reserved for future parameters; accepted so callers are not broken.
 
@@ -24,6 +26,8 @@ def optimize_context(messages: list[dict], *, config: dict | None = None, **kwar
         report            : human-readable summary
     """
     config = dict(config or {})  # reserved: future tuning knobs plug in here
+    if isinstance(messages, str):
+        messages = [{"role": "text", "content": messages}]
 
     chunks = chunk_and_hash(messages)
     marked = detect_duplicates(chunks)

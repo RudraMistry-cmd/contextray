@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "contextray"
-version = "0.1.0"
+version = "0.2.0"
 description = "Character-level context optimizer: chunks chat histories with code-block protection, deduplicates exactly, and reports per-role token savings."
 readme = "README.md"
 license = { text = "MIT" }

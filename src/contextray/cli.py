@@ -1,4 +1,9 @@
-"""CLI: ``contextray optimize input.json [--output out.json] [--stdout]``."""
+"""CLI: ``contextray optimize input [--output out.json] [--stdout] [--strict]``.
+
+Auto-detects the input: a JSON message list is optimized as structured chat;
+any other text is optimized as a single "text" message. Pass --strict to
+require the exact JSON message-list format.
+"""
 
 import argparse
 import json
@@ -38,12 +43,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    opt = subparsers.add_parser("optimize", help="Optimize messages from a JSON file.")
-    opt.add_argument("input", help="Path to a JSON file with a list of messages.")
+    opt = subparsers.add_parser("optimize", help="Optimize messages from a JSON file or any text.")
+    opt.add_argument("input", help="Path to a JSON message list, or any text file.")
     opt.add_argument("--output", "-o",
-                     help="Where to write the optimized JSON (default: <input>_optimized<ext>).")
+                     help="Where to write the optimized JSON "
+                          "(default: <input>_optimized<ext>; text inputs become "
+                          "<input>_optimized.json).")
     opt.add_argument("--stdout", action="store_true",
                      help="Print the optimized JSON to stdout instead of a file.")
+    opt.add_argument("--strict", action="store_true",
+                     help="Require the exact JSON message-list format; no text auto-detection.")
     return parser
 
 
@@ -52,28 +61,60 @@ def _fail(message: str) -> int:
     return 1
 
 
-def _load_and_validate(path: str) -> tuple[list, int] | None:
+def _as_messages(data: list, expected: str) -> list | None:
+    for i, message in enumerate(data):
+        if not isinstance(message, dict) or "role" not in message or "content" not in message:
+            _fail(f"{expected} (message {i} must have 'role' and 'content')")
+            return None
+        if not isinstance(message["role"], str) or not isinstance(message["content"], str):
+            _fail(f"{expected} (message {i} 'role' and 'content' must be strings)")
+            return None
+    return data
+
+
+def _is_message(item: dict) -> bool:
+    return isinstance(item.get("role"), str) and isinstance(item.get("content"), str)
+
+
+def _load_input(path: str, strict: bool) -> tuple[list, str] | None:
     try:
         with open(path, encoding="utf-8") as f:
-            messages = json.load(f)
-    except json.JSONDecodeError:
-        _fail(f"{EXPECTED_FORMAT} ({path} is not valid JSON)")
-        return None
+            raw = f.read()
     except OSError as exc:
         _fail(f"could not read {path}: {exc.strerror or exc}")
         return None
 
-    if not isinstance(messages, list):
-        _fail(f"{EXPECTED_FORMAT} (top-level value must be a list)")
+    # Strip a UTF-8 BOM: str.strip() does not remove U+FEFF, so a BOM would
+    # silently break hashing and crash --stdout on legacy consoles.
+    if raw.startswith("\ufeff"):
+        raw = raw[1:]
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        if strict:
+            _fail(f"{EXPECTED_FORMAT} ({path} is not valid JSON)")
+            return None
+        return [{"role": "text", "content": raw}], "text"
+
+    if isinstance(data, dict):
+        if _is_message(data):
+            return [data], "json"
+        if strict:
+            _fail(f"{EXPECTED_FORMAT} (top-level value must be a list of messages)")
+            return None
+        return [{"role": "text", "content": raw}], "text"
+
+    if isinstance(data, list) and all(isinstance(item, dict) for item in data):
+        messages = _as_messages(data, EXPECTED_FORMAT)
+        if messages is None:
+            return None
+        return messages, "json"
+
+    if strict:
+        _fail(f"{EXPECTED_FORMAT} (top-level value must be a list of messages)")
         return None
-    for i, message in enumerate(messages):
-        if not isinstance(message, dict) or "role" not in message or "content" not in message:
-            _fail(f"{EXPECTED_FORMAT} (message {i} must have 'role' and 'content')")
-            return None
-        if not isinstance(message["role"], str) or not isinstance(message["content"], str):
-            _fail(f"{EXPECTED_FORMAT} (message {i} 'role' and 'content' must be strings)")
-            return None
-    return messages, 0
+    return [{"role": "text", "content": raw}], "text"
 
 
 def _format_report(result: dict) -> str:
@@ -116,10 +157,10 @@ def _format_report(result: dict) -> str:
 
 
 def _run(args) -> int:
-    loaded = _load_and_validate(args.input)
+    loaded = _load_input(args.input, strict=args.strict)
     if loaded is None:
         return 1
-    messages, _ = loaded
+    messages, kind = loaded
 
     result = optimize_context(messages)
     payload = {
@@ -129,7 +170,12 @@ def _run(args) -> int:
     }
 
     if args.stdout:
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        payload_str = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+        buffer = getattr(sys.stdout, "buffer", None)
+        if buffer is not None:
+            buffer.write(payload_str.encode("utf-8"))
+        else:
+            sys.stdout.write(payload_str)
         print(f"{_CHECK} ContextRay Optimization Complete", file=sys.stderr)
         print(_format_report(result), file=sys.stderr)
         return 0
@@ -137,6 +183,8 @@ def _run(args) -> int:
     output_path = args.output
     if not output_path:
         base, ext = os.path.splitext(args.input)
+        if kind == "text":
+            ext = ".json"  # text mode always produces JSON; don't mislabel it
         output_path = f"{base}_optimized{ext}"
     try:
         with open(output_path, "w", encoding="utf-8") as f:
