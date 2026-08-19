@@ -50,7 +50,8 @@ Most "solutions" summarize or compress with ML models. That destroys:
 | **Is** | a deterministic, character-level context optimizer |
 | **Is** | byte-safe: it only ever *removes* text, never rewrites it |
 | **Does** | detect exact duplicates → replace repeats with small markers |
-| **Does** | protect code blocks, system messages, and small chunks |
+| **Does** | protect code blocks, whole-line JSON, and bare Python (segmentation layer) |
+| **Does** | protect system messages, and skip small chunks conservatively |
 | **Is NOT** | an ML model, a summarizer, or a compressor |
 | **Is NOT** | fuzzy/paraphrase-aware (V1: exact matches only) |
 
@@ -88,6 +89,16 @@ print(result["metrics"])                  # impact numbers
 print(result["report"])                   # human-readable summary
 ```
 
+Raw text / documents get their own entry point — the segmentation layer
+protects fenced code, JSON, and bare Python blocks before deduplication:
+
+```python
+from contextray import optimize_text
+
+result = optimize_text(open("notes.md", encoding="utf-8").read())
+print(result["segments"])   # {'code': {'count': 4, 'mode': 'protected'}, ...}
+```
+
 ### CLI
 
 ```bash
@@ -95,12 +106,15 @@ contextray optimize input.json            # writes input_optimized.json
 contextray optimize input.json --output out.json
 contextray optimize input.json --stdout   # print JSON to stdout
 contextray optimize notes.txt             # plain text works too — auto-detected
+contextray optimize --strict input.json   # require the exact JSON message-list format
+contextray optimize --max-input-mb 200 input.json   # raise the size guard (default 50 MB)
 ```
 
 The CLI **auto-detects** the input: a JSON message list is optimized as
 structured chat; any other file (`.txt`, `.md`, logs, raw dumps) is optimized
-as a single `"text"` message. Pass `--strict` to require the exact JSON
-message-list format.
+via `optimize_text()` — segmentation included, with a `SEGMENTS` section in
+the console report. Pass `--strict` to require the exact JSON message-list
+format.
 
 ---
 
@@ -141,10 +155,13 @@ message list is rejected with:
 [ERROR] Invalid input format. Expected: [{'role': '...', 'content': '...'}]
 ```
 
-> Note: the Python API does *not* validate for you — malformed input raises
-> natural Python errors (`KeyError`, `TypeError`, `json.JSONDecodeError`).
-> Validate your data at the boundary. A bare `str` is accepted and treated
-> as a single `"text"` message.
+> Note: the Python API intentionally fails fast — malformed input raises
+> `InvalidMessageError` (a `ValueError` subclass) naming the offending
+> message index, e.g.
+> `InvalidMessageError: message[3]: 'content' is None, expected str (tool-call-only turns are not supported — see README Input Contract)`.
+> No coercion happens (`None` is not auto-converted to `""`, block lists
+> are not stringified) — validate your data at the boundary. A bare `str`
+> is accepted and treated as a single `"text"` message.
 
 ### ✅ Yes — LLM responses work directly
 
@@ -161,10 +178,11 @@ optimized = optimize_context(messages)["optimized_context"]
 
 | Input | Why it fails |
 |---|---|
-| `content: None` (tool-call-only assistant turns) | not a string → `TypeError` |
-| `content` as a list of typed parts (image/text arrays) | not a string |
+| `content: None` (tool-call-only assistant turns) | `InvalidMessageError: message[i]: 'content' is None, expected str (tool-call-only turns are not supported — see README Input Contract)` |
+| `content` as a list of typed parts (image/text arrays) | `InvalidMessageError: message[i]: 'content' is a list, expected str (typed content blocks are not supported — see README Input Contract)` |
 | top-level dict / string / number | not a list |
-| missing `role` or `content` key | `KeyError` |
+| missing `role` or `content` key | `InvalidMessageError: message[i]: missing required key 'role'` / `...'content'` |
+| message is not a dict | `InvalidMessageError: message[i]: expected a dict with 'role' and 'content', got <type>` |
 | dicts with extra keys `{"role", "content", "name", ...}` | **works** — extra keys are ignored |
 
 ### Where the messages come from (no extra work needed)
@@ -191,7 +209,8 @@ messages.append({"role": "assistant", "content": text})
 
 ## 📈 Output Structure
 
-`optimize_context()` returns a dict with 4 keys:
+`optimize_context()` returns a dict with 4 keys; `optimize_text()` returns the
+same 4 plus a 5th (`segments`):
 
 | key | type | meaning |
 |---|---|---|
@@ -199,6 +218,7 @@ messages.append({"role": "assistant", "content": text})
 | `metrics` | `dict` | impact numbers (see below) |
 | `top_waste_blocks` | `list[dict]` | worst duplicate blocks, max 5, sorted by `chars_wasted` desc |
 | `report` | `str` | full human-readable summary (incl. per-role stats) |
+| `segments` | `dict` | **`optimize_text()` only** — per-type segmentation stats, e.g. `{"code": {"count": 4, "mode": "protected"}}` |
 
 `metrics`:
 
@@ -209,12 +229,31 @@ messages.append({"role": "assistant", "content": text})
   "chars_saved": 807,
   "reduction_percentage": 22.6,
   "est_tokens_in": 891.5,
-  "est_tokens_saved": 201.75
+  "est_tokens_saved": 201.75,
+  "segmentation_fallback": false
 }
 ```
 
+`segmentation_fallback` appears in the `optimize_text()` path: it is `true`
+when the segmentation step itself failed and the pipeline ran over the raw
+text instead (safe, but without STRICT protection — the report is prefixed
+with a note).
+
 Token estimates use the English heuristic **chars ÷ 4** — approximate by
-design.
+design. Both `optimize_context()` and `optimize_text()` accept an optional
+`token_estimator: Callable[[str], float]` kwarg; when provided it replaces
+the chars/4 figure everywhere: it is called with the full original text and
+the full optimized text, and `est_tokens_saved` is
+`est_tokens_in - est_tokens_out`. If it raises, the error is re-raised with
+context (`token_estimator raised on optimized text: <original error>`).
+
+```python
+# tiktoken is NOT a dependency of this package - this example is illustrative
+# only. pip install tiktoken if you want to try it.
+# import tiktoken
+# enc = tiktoken.encoding_for_model("gpt-4o")
+# result = optimize_context(messages, token_estimator=lambda t: len(enc.encode(t)))
+```
 
 `top_waste_blocks` entry: `{"hash", "role", "count", "chars_wasted"}`.
 
@@ -226,8 +265,39 @@ design.
 ## 🔬 How It Works — The Pipeline
 
 ```
+segment_text (segmentation layer)            ← optimize_text() only
+      ↓
 chunk_and_hash  →  detect_duplicates  →  optimize_chunks  →  generate_metrics_and_report
 ```
+
+### 0. Structural Segmentation (`segmentation.py`)
+
+Before deduplication, `segment_text()` splits raw text into ordered,
+contiguous, byte-exact segments. Each segment is either **STRICT** (masked
+out of the pipeline, restored byte-for-byte afterwards) or **FLEXIBLE**
+(deduplicated like ordinary text). The rules are purely structural — no NLP,
+no guessing:
+
+| type | detection rule | mode |
+|---|---|---|
+| `code` | ``` ```-fenced block with a language tag | STRICT |
+| `block` | ``` ```-fenced block with no language tag | STRICT |
+| `json` | whole lines forming a single parseable JSON value (verified with `json.loads`) | STRICT |
+| `code` | ≥ 3 whole lines that parse as valid Python (verified with `ast.parse`) — covers pasted code without fences | STRICT |
+| `text` | everything else | FLEXIBLE |
+
+Masking replaces each STRICT segment with a `__SEG…` token padded to the
+segment's exact length, so chunking behavior and metrics are unchanged, and
+byte-identical STRICT segments collapse like any other duplicate (the
+first occurrence is restored byte-for-byte). Guards:
+
+- **Line-count firewall:** the unfenced-Python scan restarts from every
+  candidate line (superlinear on fence-free prose), so inputs above
+  **20,000 lines** skip it — fences and JSON still run. Configurable via
+  `segment_text(..., max_lines_for_python_scan=...)` (`None` = unlimited).
+- **Safe fallback:** if segmentation itself raises, `optimize_text()` runs
+  the pipeline over the raw text and sets `metrics["segmentation_fallback"]`
+  to `True` — you always get a result, never a crash.
 
 ### 1. Chunking (`chunking.py`)
 
@@ -282,15 +352,31 @@ Guaranteed:
 - ✅ System messages preserved (never touched)
 - ✅ Cross-role duplicates NOT removed (only flagged)
 - ✅ Code blocks protected (never split, never corrupted)
-- ✅ Small chunks (< 64 chars) handled conservatively
+- ✅ STRICT segments survive **byte-exact** — fenced code, whole-line JSON,
+  and parseable bare Python are masked before dedup and restored
+  byte-for-byte even when duplicated (`optimize_text()` path)
 - ✅ No negative reductions (marker must be smaller than the chunk)
+- ✅ No crashes on bad inputs: `InvalidMessageError` naming the message
+  index; CLI exits `1` with a one-line error, never a traceback
+- ✅ Safe fallback: segmentation failure → plain-text pipeline with
+  `segmentation_fallback: true` instead of an exception
+- ✅ Bounded worst cases: unfenced-Python scan capped at 20,000 lines;
+  CLI rejects inputs over `--max-input-mb` (default 50 MB)
+- ✅ Small chunks (< 64 chars) handled conservatively
 
 V1 limitations (be aware):
 
 - ⚠️ Only **exact byte-level duplicates** — no similarity, no paraphrases
-- ⚠️ Code-block protection covers standard triple-backtick fences only
-  (inline `` `code` `` and malformed fences chunk like plain text)
-- ⚠️ Token estimates are approximate (÷4 English heuristic)
+- ⚠️ Structural recognition covers standard triple-backtick fences,
+  whole-line JSON, and bare Python (≥ 3 parseable lines); inline
+  `` `code` `` and malformed fences chunk like plain text
+- ⚠️ Above 20,000 lines the bare-Python scan is skipped (fences and JSON
+  still protected) — raise/disable `max_lines_for_python_scan` if you need
+  it on huge documents
+- ⚠️ In fallback mode (`segmentation_fallback: true`) STRICT protection is
+  lost; the result is still valid, just unprotected
+- ⚠️ Token estimates are approximate (÷4 English heuristic, or your
+  `token_estimator`)
 - ⚠️ `config` kwarg is accepted but currently ignored (reserved for tuning)
 
 ---
@@ -409,6 +495,18 @@ includes "Cross-role duplicates detected (not removed for safety)".
 The chunk's text was byte-identical to earlier chunk `#5` (the reference
 copy, which is still in the transcript).
 
+**Q: What is the `segments` key / `SEGMENTS` section?**
+`optimize_text()` reports what the segmentation layer did per type:
+`{"code": {"count": 4, "mode": "protected"}}` — `protected` means every
+segment of that type was STRICT (masked and restored byte-exact),
+`processed` means FLEXIBLE (deduplicated like text). The CLI prints the
+same data as a `SEGMENTS` section in the console report for text inputs.
+
+**Q: The CLI refused my file with a `--max-input-mb` error.**
+Inputs over 50 MB are rejected to bound memory. Re-run with
+`--max-input-mb 200` (or any size) or split the file — the error message
+says both.
+
 **Q: Does it ever *create* tokens?**
 Only pathological micro-chunks could be replaced by a longer marker — that
 case is explicitly guarded (chunk kept, stats recomputed) so output chars
@@ -446,7 +544,9 @@ no transformation of kept content.
 ## 🖥️ CLI Reference
 
 ```
-usage: contextray optimize [-h] [--output OUTPUT] [--stdout] input
+usage: contextray optimize [-h] [--output OUTPUT] [--stdout] [--strict]
+                           [--max-input-mb MAX_INPUT_MB]
+                           input
 
 positional arguments:
   input                 Path to a JSON message list, or any text file.
@@ -456,36 +556,45 @@ options:
   --output, -o OUTPUT  Where to write the optimized JSON
                        (default: <input>_optimized<ext>)
   --stdout              Print the optimized JSON to stdout instead of a file
+  --strict              Require the exact JSON message-list format; no text
+                        auto-detection
+  --max-input-mb FLOAT  Reject input files larger than this many MB
+                        (default: 50)
 ```
 
 Notes:
 
 - Default output: `input_optimized.json` (same extension as input). Text
   inputs always become `<name>_optimized.json` — the result is JSON either way.
-- The CLI writes 3 of the 4 result keys (`optimized_context`, `metrics`,
+- Text inputs run through `optimize_text()` — the console report gains a
+  `SEGMENTS` section (per-type counts/modes) and the metrics include
+  `segmentation_fallback`.
+- The CLI writes 3 of the 5 result keys (`optimized_context`, `metrics`,
   `top_waste_blocks`) — the printable `report` is shown on the console only.
 - Exit codes: `0` success, `1` error, `2` usage error.
 - Validation errors are reported to stderr with `[ERROR]`/`❌`.
+- `--max-input-mb` guards memory: an oversized file is refused with a
+  message suggesting the fix (`(raise the limit or split the file)`).
 
 ---
 
 ## ✅ Tests
 
-Run the API test (no dependencies, plain `assert`):
+Three assert-based suites (no pytest required); 222 checks in total:
 
 ```bash
-python tests/test_core.py
-```
-
-Run the end-to-end stress pipeline (covers 60k+ char floods, code-heavy
-documents, unicode, and optional real Ollama contexts):
-
-```bash
-python tests/test_pipeline.py                # uses local Ollama if present
+python tests/test_core.py             # 18 checks — API contract, validation errors, token_estimator
+python tests/test_pipeline.py         # 181 checks — end-to-end stress pipeline (uses local Ollama if present)
 python tests/test_pipeline.py --skip-ollama  # offline mode
+python tests/test_segmentation.py     # 23 checks — segment rules, byte-exact protection, guards, fallback
 ```
 
-Stress fixtures are written to `test_contexts.txt` in the repo root.
+The pipeline suite covers 60k+ char floods, code-heavy documents, unicode,
+CLI text/JSON modes, the SEGMENTS section, and `--max-input-mb`. The
+segmentation suite verifies fence/JSON/bare-Python rules, byte-exact
+restoration, STRICT duplicate collapse, the line-count firewall, and the
+fallback path. Stress fixtures are written to `test_contexts.txt` in the
+repo root.
 
 ---
 

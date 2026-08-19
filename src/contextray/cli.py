@@ -10,7 +10,7 @@ import json
 import os
 import sys
 
-from .core import optimize_context
+from .core import optimize_context, optimize_text
 
 EXPECTED_FORMAT = "Invalid input format. Expected: [{'role': '...', 'content': '...'}]"
 
@@ -19,6 +19,7 @@ _CHECK = "[OK]"
 _IMPACT = "IMPACT"
 _WASTE = "TOP WASTE"
 _SAFETY = "SAFETY"
+_SEGMENTS = "SEGMENTS"
 
 
 def _configure_markers() -> None:
@@ -53,6 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Print the optimized JSON to stdout instead of a file.")
     opt.add_argument("--strict", action="store_true",
                      help="Require the exact JSON message-list format; no text auto-detection.")
+    opt.add_argument("--max-input-mb", type=float, default=50.0,
+                     help="Reject input files larger than this many MB (default: 50).")
     return parser
 
 
@@ -76,7 +79,18 @@ def _is_message(item: dict) -> bool:
     return isinstance(item.get("role"), str) and isinstance(item.get("content"), str)
 
 
-def _load_input(path: str, strict: bool) -> tuple[list, str] | None:
+def _load_input(path: str, strict: bool, max_input_mb: float = 50.0) -> tuple[list, str] | None:
+    try:
+        size_bytes = os.path.getsize(path)
+    except OSError as exc:
+        _fail(f"could not read {path}: {exc.strerror or exc}")
+        return None
+    if size_bytes > max_input_mb * 1024 * 1024:
+        _fail(
+            f"input file is {size_bytes / (1024 * 1024):.1f}MB, "
+            f"exceeds --max-input-mb limit of {max_input_mb:.1f}MB "
+            "(raise the limit or split the file)")
+        return None
     try:
         with open(path, encoding="utf-8") as f:
             raw = f.read()
@@ -127,6 +141,13 @@ def _format_report(result: dict) -> str:
     lines = [
         "=== CONTEXTRAY OPTIMIZATION REPORT ===",
         "",
+    ]
+    if result.get("segments"):
+        lines.append(_SEGMENTS)
+        for seg_type, info in result["segments"].items():
+            lines.append(f"- {seg_type}: {info['count']} ({info['mode']})")
+        lines.append("")
+    lines += [
         _IMPACT,
         f"Original: {total_in:,} chars",
         f"Optimized: {total_out:,} chars",
@@ -157,12 +178,12 @@ def _format_report(result: dict) -> str:
 
 
 def _run(args) -> int:
-    loaded = _load_input(args.input, strict=args.strict)
+    loaded = _load_input(args.input, strict=args.strict, max_input_mb=args.max_input_mb)
     if loaded is None:
         return 1
     messages, kind = loaded
 
-    result = optimize_context(messages)
+    result = optimize_text(messages[0]["content"]) if kind == "text" else optimize_context(messages)
     payload = {
         "optimized_context": result["optimized_context"],
         "metrics": result["metrics"],

@@ -22,17 +22,21 @@ Usage:  python tests/test_pipeline.py      (attempts local Ollama; falls back)
         python tests/test_pipeline.py --skip-ollama
 """
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import random
 import sys
+import tempfile
 import urllib.request
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(_THIS_DIR)
 sys.path.insert(0, os.path.join(_REPO_ROOT, "src"))
 
+import contextray.cli as cli  # noqa: E402
 from contextray.chunking import (  # noqa: E402
     chunk_and_hash,
     MAX_CHUNK_SIZE,
@@ -202,6 +206,91 @@ def test_duplicate_actions(name, messages, msg_index, duplicate_type):
     dup_chunks = marked[start:end]
     check(f"{name}: message[{msg_index}] chunks are all {expected}",
           len(dup_chunks) > 0 and all(c["action"] == expected for c in dup_chunks))
+
+
+def test_cli_text_mode_uses_optimize_text():
+    original_text = cli.optimize_text
+    original_context = cli.optimize_context
+    captured = []
+
+    def fake_optimize_text(text):
+        captured.append(text)
+        return {
+            "optimized_context": [{"role": "text", "content": text}],
+            "metrics": {"total_chars_in": len(text), "total_chars_out": len(text),
+                        "chars_saved": 0, "reduction_percentage": 0.0,
+                        "est_tokens_in": len(text) / 4, "est_tokens_saved": 0.0},
+            "top_waste_blocks": [],
+            "report": "Impact: dummy",
+            "segments": {"code": {"count": 2, "mode": "protected"},
+                         "text": {"count": 1, "mode": "processed"}},
+        }
+
+    def fake_optimize_context(messages):
+        raise AssertionError("optimize_context() must not be called for text input")
+
+    cli.optimize_text = fake_optimize_text
+    cli.optimize_context = fake_optimize_context
+    stream = io.StringIO()
+    path = os.path.join(HERE, "_cli_text_mode_sample.txt")
+    out_json = os.path.splitext(path)[0] + "_optimized.json"
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("hello text\n```python\nx = 1\n```")
+        with contextlib.redirect_stdout(stream):
+            exit_code = cli.main(["optimize", path])
+    finally:
+        cli.optimize_text = original_text
+        cli.optimize_context = original_context
+        for leftover in (path, out_json):
+            if os.path.exists(leftover):
+                os.unlink(leftover)
+    check("CLI text mode: exit code 0", exit_code == 0)
+    check("CLI text mode: optimize_text() was called with the raw text",
+          captured and captured[0].startswith("hello text"))
+    check("CLI text mode: report prints the Segments block",
+          "SEGMENTS" in stream.getvalue() and "code: 2 (protected)" in stream.getvalue())
+
+
+def test_cli_json_mode_skips_segments_section():
+    stream = io.StringIO()
+    path = os.path.join(HERE, "_cli_json_mode_sample.json")
+    out_json = os.path.splitext(path)[0] + "_optimized.json"
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump([{"role": "user", "content": "hello there"}], f)
+        with contextlib.redirect_stdout(stream):
+            exit_code = cli.main(["optimize", path])
+    finally:
+        for leftover in (path, out_json):
+            if os.path.exists(leftover):
+                os.unlink(leftover)
+    check("CLI JSON mode: exit code 0", exit_code == 0)
+    check("CLI JSON mode: no Segments section (optimize_context has none)",
+          "SEGMENTS" not in stream.getvalue())
+
+
+def test_cli_max_input_mb_rejects_oversize_file():
+    stream_out = io.StringIO()
+    stream_err = io.StringIO()
+    path = os.path.join(HERE, "_cli_oversize_sample.txt")
+    out_json = os.path.splitext(path)[0] + "_optimized.json"
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("x" * 4096)  # ~4 KB, far above a 0.001 MB limit
+        with contextlib.redirect_stdout(stream_out), \
+                contextlib.redirect_stderr(stream_err):
+            exit_code = cli.main(["optimize", path, "--max-input-mb", "0.001"])
+    finally:
+        for leftover in (path, out_json):
+            if os.path.exists(leftover):
+                os.unlink(leftover)
+    check("CLI size guard: exits non-zero", exit_code != 0)
+    check("CLI size guard: error names the limit",
+          "Error:" in stream_err.getvalue()
+          and "exceeds --max-input-mb limit of 0.0MB" in stream_err.getvalue())
+    check("CLI size guard: no output file was created",
+          not os.path.exists(out_json))
 
 
 # --------------------------------------------------------------------------
@@ -575,6 +664,15 @@ def main():
           and f"{roles['assistant']['redundancy_percentage']}% redundant" in report["report"])
     check("big chunks still hashed (no regression)",
           all(c["hash"] is not None for c in chunks if len(c["text"]) >= MIN_CHUNK_SIZE))
+
+    print()
+
+    print("\n" + "=" * 70)
+    print("CLI WIRING (text mode -> optimize_text, segments section)")
+    print("=" * 70)
+    test_cli_text_mode_uses_optimize_text()
+    test_cli_json_mode_skips_segments_section()
+    test_cli_max_input_mb_rejects_oversize_file()
 
     print()
 

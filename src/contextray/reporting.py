@@ -1,19 +1,41 @@
+from collections.abc import Callable
+
 from .chunking import MIN_CHUNK_SIZE
 
 
-def generate_metrics_and_report(original_chunks: list[dict], optimized_chunks: list[dict]) -> dict:
+def _call_estimator(estimator: Callable[[str], float], text: str, label: str) -> float:
+    try:
+        return estimator(text)
+    except Exception as exc:
+        raise RuntimeError(f"token_estimator raised on {label}: {exc}") from exc
+
+
+def generate_metrics_and_report(original_chunks: list[dict], optimized_chunks: list[dict],
+                                token_estimator: Callable[[str], float] | None = None) -> dict:
     total_chars_in = sum(c["length"] for c in original_chunks)
     total_chars_out = sum(len(c["text"]) for c in optimized_chunks)
     chars_saved = total_chars_in - total_chars_out
     reduction_percentage = round(chars_saved / total_chars_in * 100, 2) if total_chars_in else 0.0
+
+    if token_estimator is None:
+        est_tokens_in = total_chars_in / 4
+        est_tokens_saved = chars_saved / 4
+        token_note = "Estimated tokens (English heuristic)"
+    else:
+        original_text = "".join(c["text"] for c in original_chunks)
+        optimized_text = "".join(c["text"] for c in optimized_chunks)
+        est_tokens_in = _call_estimator(token_estimator, original_text, "original text")
+        est_tokens_saved = est_tokens_in - _call_estimator(
+            token_estimator, optimized_text, "optimized text")
+        token_note = "Estimated tokens (custom token_estimator)"
 
     metrics = {
         "total_chars_in": total_chars_in,
         "total_chars_out": total_chars_out,
         "chars_saved": chars_saved,
         "reduction_percentage": reduction_percentage,
-        "est_tokens_in": total_chars_in / 4,
-        "est_tokens_saved": chars_saved / 4,
+        "est_tokens_in": est_tokens_in,
+        "est_tokens_saved": est_tokens_saved,
     }
 
     by_key = {}
@@ -63,7 +85,7 @@ def generate_metrics_and_report(original_chunks: list[dict], optimized_chunks: l
     report_lines = [
         f"Impact: {total_chars_in} chars in -> {total_chars_out} chars out "
         f"({chars_saved} chars saved, {reduction_percentage}% reduction)",
-        f"Estimated tokens (English heuristic): {metrics['est_tokens_in']} in, {metrics['est_tokens_saved']} saved",
+        f"{token_note}: {metrics['est_tokens_in']} in, {metrics['est_tokens_saved']} saved",
         f"Duplicates removed: {num_removed}",
         f"Cross-role duplicates detected (not removed for safety): {num_flagged}",
         "Top waste blocks:",

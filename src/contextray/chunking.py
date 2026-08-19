@@ -1,6 +1,8 @@
 import hashlib
 import re
 
+from .errors import InvalidMessageError
+
 MAX_CHUNK_SIZE = 1000
 MIN_CHUNK_SIZE = 64  # Prevents chunk explosion and negative reduction on tiny strings
 
@@ -10,6 +12,7 @@ MIN_CHUNK_SIZE = 64  # Prevents chunk explosion and negative reduction on tiny s
 
 
 def chunk_and_hash(messages: list[dict]) -> list[dict]:
+    _validate_messages(messages)
     chunks = []
     next_id = 0
 
@@ -37,6 +40,36 @@ def chunk_and_hash(messages: list[dict]) -> list[dict]:
             next_id += 1
 
     return chunks
+
+
+def _validate_messages(messages: list[dict]) -> None:
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            raise InvalidMessageError(
+                f"message[{index}]: expected a dict with 'role' and 'content', "
+                f"got {type(message).__name__}")
+        if "role" not in message:
+            raise InvalidMessageError(f"message[{index}]: missing required key 'role'")
+        if "content" not in message:
+            raise InvalidMessageError(f"message[{index}]: missing required key 'content'")
+        if not isinstance(message["role"], str):
+            raise InvalidMessageError(
+                f"message[{index}]: 'role' is {message['role']!r}, expected str")
+        content = message["content"]
+        if not isinstance(content, str):
+            if content is None:
+                hint = ("tool-call-only turns are not supported "
+                        "\u2014 see README Input Contract")
+                described = "None"
+            elif isinstance(content, list):
+                hint = ("typed content blocks are not supported "
+                        "\u2014 see README Input Contract")
+                described = "a list"
+            else:
+                hint = "see README Input Contract"
+                described = repr(content)
+            raise InvalidMessageError(
+                f"message[{index}]: 'content' is {described}, expected str ({hint})")
 
 
 def _protect_code_blocks(text: str) -> tuple[str, list[tuple[str, str]]]:
